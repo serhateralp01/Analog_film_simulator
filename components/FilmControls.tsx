@@ -5,6 +5,7 @@ import { generateSettingsFromPrompt, editImageWithNanoBanana, analyzeImageForSug
 import { Histogram } from './Histogram';
 import { DevelopState, AiState } from '../App';
 import { ProcessingOverlay } from './ProcessingOverlay';
+import { authService } from '../services/authService';
 
 interface FilmControlsProps {
   // Develop Props
@@ -30,6 +31,7 @@ interface FilmControlsProps {
 
   clearFutureImageHistory: () => void;
   comparePos: number;
+  currentUser: any; // Passed from App
 }
 
 const DEFAULT_AI_FEATURES = ["Vintage 1950s", "Cyberpunk Neon", "Oil Painting", "Charcoal Sketch"];
@@ -54,7 +56,7 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
   currentImage, aiLogs, onAiChange,
   originalUpload,
   undoImage, redoImage, canUndoImage, canRedoImage,
-  clearFutureImageHistory, comparePos
+  clearFutureImageHistory, comparePos, currentUser
 }) => {
   const [magicPrompt, setMagicPrompt] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
@@ -75,12 +77,21 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
   const [suggestedAtmosphere, setSuggestedAtmosphere] = useState<string[]>(DEFAULT_AI_ATMOSPHERE);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  // Load Presets from Cloud/Local based on Auth
   useEffect(() => {
-    const saved = localStorage.getItem('analog_presets');
-    if (saved) {
-      try { setCustomPresets(JSON.parse(saved)); } catch (e) { console.error(e); }
-    }
-  }, []);
+    const loadPresets = async () => {
+       if (currentUser) {
+           const data = await authService.getUserData(currentUser.uid, 'presets');
+           if (data) setCustomPresets(data);
+           else setCustomPresets([]);
+       } else {
+           // Fallback (shouldn't happen in authenticated app)
+           const saved = localStorage.getItem('analog_presets');
+           if (saved) try { setCustomPresets(JSON.parse(saved)); } catch(e){}
+       }
+    };
+    loadPresets();
+  }, [currentUser]);
 
   useEffect(() => {
     if(errorMessage) { const t = setTimeout(() => setErrorMessage(null), 5000); return () => clearTimeout(t); }
@@ -91,22 +102,30 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
     setIsSavingRecipe(true);
   };
 
-  const confirmSavePreset = () => {
+  const confirmSavePreset = async () => {
     if (newRecipeName.trim()) {
       const newPreset: CustomPreset = { name: newRecipeName, settings: { ...settings } };
       const updated = [...customPresets, newPreset];
       setCustomPresets(updated);
-      localStorage.setItem('analog_presets', JSON.stringify(updated));
       setIsSavingRecipe(false);
+      
+      // Sync to Auth Service
+      if (currentUser) {
+         await authService.saveUserData(currentUser.uid, 'presets', updated);
+      }
     }
   };
 
-  const deletePreset = (name: string, e: React.MouseEvent) => {
+  const deletePreset = async (name: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if(window.confirm(`Delete recipe '${name}'?`)) {
        const updated = customPresets.filter(p => p.name !== name);
        setCustomPresets(updated);
-       localStorage.setItem('analog_presets', JSON.stringify(updated));
+       
+       // Sync to Auth Service
+       if (currentUser) {
+         await authService.saveUserData(currentUser.uid, 'presets', updated);
+       }
     }
   };
 
@@ -322,7 +341,11 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
                  return;
              }
          }
-
+         
+         // AUTO-SWITCH VARIATION LOGIC
+         // If we are activating this layer, let's check if we need to "Switch" subsequent layers 
+         // to match the new chain output.
+         
          const newLogs = aiLogs.map(i => i.id === item.id ? { ...i, isActive: !item.isActive } : i);
          const finalImage = computeFinalImage(newLogs);
          onAiChange({ image: finalImage, logs: newLogs });
@@ -376,11 +399,6 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
 
       try {
           if (item.type === 'ai') {
-              // When regenerating/reprocessing, we must determine the correct base image.
-              // If 'useCurrentBase' is true (clicked Reprocess), we use the currently visible image (which is the output of all previous active layers).
-              // If we are just editing prompt, we generally want to use the base it was originally created with, OR current base if we want to update the chain.
-              // Since we have Smart Caching, let's always prioritize the CURRENT chain state if reprocess is requested.
-              
               const chronologicalLogs = [...aiLogs].reverse();
               const myIndex = chronologicalLogs.findIndex(l => l.id === item.id);
               
@@ -389,7 +407,6 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
               for (let i = 0; i < myIndex; i++) {
                   const prev = chronologicalLogs[i];
                   if (prev.isActive) {
-                       // Use cached variation if available, else simple afterImage
                        if (prev.variations && calculatedBase && prev.variations[calculatedBase]) {
                            calculatedBase = prev.variations[calculatedBase];
                        } else if (prev.beforeImage === calculatedBase && prev.afterImage) {
@@ -411,12 +428,11 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
                   afterImage: newImage,
                   variations: {
                       ...(item.variations || {}),
-                      [calculatedBase]: newImage // Cache this new variation
+                      [calculatedBase]: newImage 
                   }
               };
 
               const newLogs = aiLogs.map(i => i.id === item.id ? newItem : i);
-              
               const finalImage = computeFinalImage(newLogs);
               onAiChange({ image: finalImage, logs: newLogs });
 
@@ -458,7 +474,6 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
       }
   };
 
-  // A layer is stale if it is active, but we don't have a variation for the current base.
   const isLayerStale = (item: AiLogItem) => {
      if (item.type !== 'ai' || !item.isActive) return false;
      
@@ -476,8 +491,6 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
               }
          }
      }
-     
-     // If we don't have a cached variation for this expected base, it's stale
      return !(item.variations && expectedBase && item.variations[expectedBase]);
   };
 
@@ -495,7 +508,6 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
   const aiLayerLimitReached = activeLogCount('ai') >= 2;
 
   return (
-    // Mobile: h-auto, Full Width. Desktop: h-full, w-80, internal scroll.
     <div className="flex flex-col w-full md:w-80 h-auto md:h-full bg-film-panel border-t md:border-t-0 md:border-l border-film-border shrink-0 z-30 shadow-2xl relative md:overflow-hidden">
       
       <ProcessingOverlay isVisible={isGenerating || isEditing || isAnalyzing || loadingItems.size > 0} text={isAnalyzing ? "ANALYZING SPECTRUM" : "PROCESSING NEURAL EDIT"} />
@@ -529,7 +541,7 @@ export const FilmControls: React.FC<FilmControlsProps> = ({
         <button onClick={() => setActiveTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${activeTab === 'ai' ? 'text-film-accent bg-zinc-800/50 border-b-2 border-film-accent' : 'text-film-muted hover:text-white'}`}>AI Lab</button>
       </div>
 
-      {/* Scrollable Content: Desktop has internal scroll, Mobile flows naturally */}
+      {/* Scrollable Content */}
       <div className="flex-1 p-5 space-y-6 md:overflow-y-auto scrollbar-thin relative">
         
         {activeTab === 'develop' && (

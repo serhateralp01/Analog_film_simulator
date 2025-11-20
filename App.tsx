@@ -8,6 +8,7 @@ import { useHistory } from './hooks/useHistory';
 import { Onboarding } from './components/Onboarding';
 import { Auth } from './components/Auth';
 import { ShaderBackground } from './components/ShaderBackground';
+import { authService, UserProfile } from './services/authService';
 
 type ViewState = 'onboarding' | 'auth' | 'app';
 
@@ -25,19 +26,21 @@ export interface AiState {
 const App: React.FC = () => {
   // Auth & Routing State
   const [view, setView] = useState<ViewState>('onboarding');
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   
   // Initialize session
   useEffect(() => {
-     const user = localStorage.getItem('analog_user');
+     const user = authService.getCurrentUser();
      if (user) {
+        setCurrentUser(user);
         setView('app');
      }
   }, []);
 
   const handleGetStarted = () => setView('auth');
   
-  const handleLogin = () => {
-     localStorage.setItem('analog_user', 'true');
+  const handleLogin = (user: UserProfile) => {
+     setCurrentUser(user);
      setView('app');
   };
 
@@ -111,6 +114,17 @@ const App: React.FC = () => {
             // Upload State
             <div className="relative w-full min-h-screen overflow-hidden">
                 <div className="absolute inset-0 scanlines opacity-10 pointer-events-none"></div>
+                
+                {/* Profile/SignOut */}
+                <div className="absolute top-6 right-6 z-30 flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
+                    <div className="text-right">
+                        <div className="text-xs font-bold text-white uppercase">{currentUser?.displayName}</div>
+                        <div className="text-[9px] font-mono text-zinc-400">{currentUser?.email}</div>
+                    </div>
+                    <button onClick={() => { authService.logout(); setView('onboarding'); }} className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 text-[10px] uppercase tracking-widest text-zinc-400 hover:text-white hover:border-film-accent transition-colors rounded">
+                        Logout
+                    </button>
+                </div>
 
                 <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden z-10 w-full h-full min-h-screen">
                     <div className="z-10 text-center mb-12 animate-in fade-in slide-in-from-bottom-8 duration-700">
@@ -171,6 +185,7 @@ const App: React.FC = () => {
                       clearFutureImageHistory={imageHistory.clearFuture}
                       
                       comparePos={comparePos}
+                      currentUser={currentUser}
                     />
                 </div>
             </div>
