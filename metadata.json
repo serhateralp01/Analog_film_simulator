@@ -1,0 +1,5 @@
+{
+  "name": "Analog-AI",
+  "description": "An interactive analog photography workbench. Upload photos, apply realistic film simulations, grain, and light leak effects. Includes an AI-powered 'Magic Match' to generate film recipes from text descriptions.",
+  "requestFramePermissions": []
+}
